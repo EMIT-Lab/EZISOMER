@@ -1,76 +1,171 @@
-# 96-Well Localization and Cis/Trans Concentration Prediction Pipeline
+# EZISOMER
 
-This repository contains the image processing and machine learning pipeline for localizing 96 sensing wells from fluorescence images and predicting the concentrations of cis- and trans-isomers based on RGB channel intensities.
+**Fluorescence-image analysis and RGB-based E/Z concentration prediction**
 
-The pipeline is divided into two primary stages:
-1. Geometric Detection: A Convolutional Neural Network (CNN) that detects the coordinates of the 96 wells.
-2. Concentration Regression: Machine learning models (Traditional ML and an Artificial Neural Network) that predict the isomer concentrations from the extracted RGB values of those wells.
+EZISOMER provides a workflow for 96-well fluorescence-image localization, paired RGB-based concentration regression, and ANN feature interpretation. The regression scripts use **one CSV dataset** throughout. There are no dataset-combination modes, concentration-range exclusions, or automatically defined experiment subsets.
 
----
+## Files
 
-## Environment and Dependencies
+| File | Description |
+| --- | --- |
+| `CNN-detect-circle.py` | CNN well localization (original component; unchanged). |
+| `data.csv` | **Single input dataset** supplied by the user. |
+| `rgb_common.py` | Shared data loading, composition calculation, metrics, and plotting. |
+| `train_traditional_ml.py` | Ten traditional regression models; five-fold CV by default. |
+| `train_ann.py` | Multi-output ANN; leave-one-group-out CV by default, with optional random five-fold CV. |
+| `ann_feature_importance_permutation.py` | Permutation importance for the saved ANN. |
+| `README.md` / `README_CN.md` | Documentation. |
 
-To run the scripts, ensure you have a Python environment with the following libraries installed:
-* torch, torchvision (PyTorch)
-* opencv-python (cv2)
-* numpy, pandas
-* scikit-learn
-* matplotlib, seaborn
-* albumentations
-* tqdm
+The three regression/interpretability scripts consume tabular RGB measurements, not photographs directly. The CNN component runs separately.
 
-It is recommended to run the neural network scripts (CNN-detect-circle.py and ANN.py) on a CUDA-enabled GPU, though they will automatically fall back to CPU if no GPU is detected.
+## Installation
 
----
+Python 3.10+ is recommended.
 
-## File Descriptions
+```bash
+pip install numpy pandas scikit-learn matplotlib torch joblib
+```
 
-### 1. CNN-detect-circle.py
-This script trains a custom Convolutional Neural Network (KeypointNet) to localize the centers of the 96 sensing wells.
-* Architecture: 4 convolutional blocks (filter sizes 32 to 256) followed by 3 fully connected layers predicting 192 output values (x, y coordinates for 96 points).
-* Data Processing: Applies extensive data augmentation (rotations, flips, brightness adjustments) using albumentations.
-* Output: Saves the trained weights (best_model.pth), training history, validation metrics, and visualizes the predicted keypoints on test images.
+The CNN stage additionally uses `torchvision`, `opencv-python`, `albumentations`, and `tqdm`, depending on its source environment. GPU acceleration is optional for the ANN.
 
-### 2. traditinal_model.py
-This script evaluates multiple traditional machine learning algorithms for multi-output regression to predict Cis and Trans concentrations from exactly 6 RGB feature columns (A_B, A_G, A_R, B_B, B_G, B_R).
-* Models Tested: Linear Regression, Ridge, Lasso, Random Forest, Gradient Boosting, SVR, Decision Tree, and K-Nearest Neighbors (KNN).
-* Evaluation: Uses an 80/20 train-test split and 5-fold cross-validation.
-* Output: Automatically generates and saves highly detailed, publication-ready PDF plots (editable in Adobe Illustrator), including R² performance comparisons, error distributions, and feature correlation heatmaps.
+## Stage I — CNN well localization
 
-### 3. ANN.py
-This script trains a feedforward Artificial Neural Network (ANN) to perform the same Cis and Trans concentration prediction task.
-* Architecture: A 3-hidden-layer network (32 -> 16 -> 8 neurons) with ReLU activations and Dropout (p=0.1) after the first layer.
-* Training: Trains for up to 4000 epochs using the Adam optimizer, implementing early stopping with a patience of 200 epochs based on validation loss.
-* Output: Saves the trained PyTorch model and scalers (.pth and .pkl files), alongside publication-ready PDF charts of the loss history, residual distributions, and Cis:Trans ratio accuracy.
+*Original description retained.* `CNN-detect-circle.py` implements a **KeypointNet** for locating 96 well centers. The architecture consists of four convolutional blocks followed by three fully connected layers predicting 192 x/y values. The image-processing pipeline applies rotations, flips, and brightness augmentation. Outputs include model weights (`best_model.pth`), training history, validation results, and predicted keypoint visualizations.
 
----
+Historical input conventions: `.jpg` images in `DATA_96/circle/` and coordinate `.npz` files in `DATA_96/loc/`.
 
-## Data Requirements
+```bash
+python CNN-detect-circle.py
+```
 
-The scripts expect your data to be organized in specific formats and directories. Update the base directories within the code if your paths differ.
+## Single dataset: `data.csv`
 
-For CNN Well Detection:
-* Images must be .jpg files located in: DATA_96/circle/
-* Labels must be .npz files (containing x and y coordinate arrays) located in: DATA_96/loc/
+All regression and importance analyses use the **same file**, with the following required columns:
 
-For Concentration Prediction:
-* Both regression scripts expect a CSV file named all_colors_data.csv in the root directory.
-* The CSV must contain the 6 RGB feature columns (A_B, A_G, A_R, B_B, B_G, B_R) and target variable columns (which the scripts will automatically map to Cis and Trans).
+| Column | Meaning |
+| --- | --- |
+| `A_B`, `A_G`, `A_R` | Blue, green, red measurements for input A. |
+| `B_B`, `B_G`, `B_R` | Blue, green, red measurements for input B. |
+| `Y1` | Reference E concentration. |
+| `Y2` | Reference Z concentration. |
+| `图片名称` | Group identifier used by the ANN's default leave-one-group-out CV. |
 
----
+`排组`, `列号`, `A_L`, `B_L`, or additional metadata may remain in the CSV; they do not enter the model. For random five-fold CV, `图片名称` is not required.
 
-## How to Run
+Example:
 
-Step 1: Well Localization
-Run the CNN script to train the model for 96-well detection.
-> python CNN-detect-circle.py
-(Check the dynamically created results/experiment_[timestamp] folder for model weights and visualizations.)
+```csv
+图片名称,A_B,A_G,A_R,B_B,B_G,B_R,Y1,Y2
+sample_01,180,72,18,142,128,35,4,1
+sample_01,182,75,20,144,125,36,1,4
+sample_02,184,80,21,147,122,38,2,2
+```
 
-Step 2: Concentration Prediction Analysis
-After extracting the mean RGB values from your detected wells into all_colors_data.csv, run the traditional ML script to establish baselines and identify important features.
-> python traditinal_model.py
+All valid rows are retained as provided. The scripts require numeric, finite features and nonnegative concentration labels; preprocessing is limited to train-fold scaling where applicable. Use a consistent concentration unit within `data.csv`.
 
-Step 3: Neural Network Concentration Prediction
-Train the final multi-output ANN on the RGB data.
-> python ANN.py
-(Check the model_output_plots/ folder for comprehensive PDF reports of model performance.)
+### Composition metric
+
+The ANN and traditional regressors predict **E and Z concentrations**, then calculate:
+
+\[
+ de = \frac{C_E-C_Z}{C_E+C_Z}.
+\]
+
+For predicted composition, negative model-estimated concentrations are clipped to zero **only for the ratio calculation**; reported E/Z concentration predictions remain unmodified. When the ratio denominator is zero, `de` is mathematically undefined (`NaN`) and is omitted from *de-only metrics*, while the record remains in concentration training and concentration metrics. No composition-specific threshold or label is imposed. Consequently, these `de` scores are not numerically identical to earlier postprocessed results.
+
+## Stage II — Traditional machine learning
+
+**Script:** `train_traditional_ml.py`
+
+Implemented algorithms: KNN, Random Forest, Extra Trees, Decision Tree, Gradient Boosting, RBF-SVR, Linear Regression, Ridge, Lasso, and PLS. Each estimator predicts `Y1` and `Y2`; `de` is calculated from these two predictions. Scaling is fit separately on each training fold, including target scaling.
+
+Default: randomized **five-fold K-fold CV**, `random_state=42`.
+
+```bash
+python train_traditional_ml.py --data data.csv --pdf
+```
+
+Run selected models:
+
+```bash
+python train_traditional_ml.py --data data.csv --models KNN RandomForest SVR_RBF
+```
+
+Optional grouped evaluation on the **same dataset**:
+
+```bash
+python train_traditional_ml.py --data data.csv --cv loao --group-column 图片名称
+```
+
+Output directory: `results_traditional_kfold/` (or `results_traditional_loao/`). It contains `SUMMARY_Train_vs_Test_R2.csv`, `test_OOF_predictions_all_models.csv`, `fold_training_predictions_all_models.csv`, `fold_train_test_metrics.csv`, saved `.joblib` estimators, and PNG/PDF graphs.
+
+## Stage III — ANN concentration prediction
+
+**Script:** `train_ann.py`
+
+- Six RGB inputs → hidden layers **32 → 16 → 8** → two concentration outputs.
+- ReLU activations, Dropout `0.10` after each of the first two hidden layers.
+- Adam optimizer, up to 4,000 epochs, batch size 8, patience 200 for early stopping.
+- Feature and target scaling are fitted from training records only.
+
+Default evaluation is **leave-one-group-out CV** (LOAO): the `图片名称` value is used as the group key. Each distinct key is held out once. Epoch selection uses a separate validation split inside each training fold; the held-out test group is not used for early stopping.
+
+```bash
+python train_ann.py --data data.csv --cv loao --pdf
+```
+
+To compare the **same dataset** under random five-fold CV:
+
+```bash
+python train_ann.py --data data.csv --cv kfold --folds 5 --pdf
+```
+
+Quick execution test (not for scientific reporting):
+
+```bash
+python train_ann.py --data data.csv --quick --skip-plots
+```
+
+ANN outputs: `SUMMARY_Train_vs_Test_R2.csv`, `test_OOF_predictions.csv`, `fold_training_predictions.csv`, `fold_train_test_metrics.csv`, `fold_details.csv`, `training_history.csv`, the final `final_ann_model.pth`, and `final_scaler_X.pkl` / `final_scaler_y.pkl`. LOAO also writes `LOAO_metrics_BY_GROUP.csv`.
+
+## Stage IV — ANN permutation feature importance
+
+**Script:** `ann_feature_importance_permutation.py`
+
+Load the final trained ANN; independently permute each of the six RGB features across the records in `data.csv` while keeping ANN parameters unchanged. Importance is the **increase in MAE** over the unchanged inputs, measured over repeated permutations (50 by default), and reported as mean ± SD. Separate results are produced for E, Z, total concentration, and calculated `de`.
+
+```bash
+python ann_feature_importance_permutation.py --data data.csv --results results_ann_loao --repeats 50 --pdf
+```
+
+Outputs: `permutation_repeats.csv`, `permutation_importance_summary.csv`, and plots. The analysis uses the final model on the provided dataset; it represents **in-sample model dependence**, not independent test-fold importance. Normalized importance percentages are descriptive and not physical contributions.
+
+## Metrics and interpretation
+
+Each training script reports a single overall dataset label, **`all_data`**, with:
+
+- `Train_R2_fold_mean`: mean training R² across CV folds.
+- `Test_R2_OOF_pooled`: pooled out-of-fold test R²; one held-out prediction per input record.
+- `Test_MAE_OOF`, `Test_RMSE_OOF`, `Test_Bias_OOF`.
+
+Four prediction targets are reported: `E_concentration`, `Z_concentration`, `total_concentration`, and `de_from_concentration`. The target and feature definitions are the same in both training scripts. Constant-valued target groups do not have a meaningful R².
+
+Model comparison is best performed with the **same CSV and the same `--cv` option**. Different CV schemes answer different validation questions and need not yield identical scores.
+
+## Example directory
+
+```text
+EZISOMER/
+├── CNN-detect-circle.py
+├── data.csv
+├── rgb_common.py
+├── train_traditional_ml.py
+├── train_ann.py
+├── ann_feature_importance_permutation.py
+├── README.md
+└── README_CN.md
+```
+
+## Research use
+
+The code does not impose chemical class-specific row selection. Any scientific inclusion/exclusion policy should be applied transparently when preparing the input CSV, before running these scripts. Model hyperparameters are listed in source code and should be documented when reporting results.
